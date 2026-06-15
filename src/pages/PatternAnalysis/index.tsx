@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   Upload,
   Star,
@@ -14,7 +14,12 @@ import {
   RotateCcw,
   ZoomIn,
   ZoomOut,
-  Move
+  Move,
+  Save,
+  Check,
+  AlertCircle,
+  Image as ImageIcon,
+  FileText
 } from 'lucide-react';
 import Card from '@/components/UI/Card';
 import Button from '@/components/UI/Button';
@@ -22,26 +27,93 @@ import Badge from '@/components/UI/Badge';
 import { useAppStore } from '@/store/useAppStore';
 import { mockTemplates } from '@/data/mockData';
 
+type ParseStatus = 'idle' | 'loading' | 'success' | 'error' | 'image';
+
 export default function PatternAnalysis() {
-  const { currentPattern } = useAppStore();
+  const { currentPattern, parsePatternFromSVG, saveAsTemplate } = useAppStore();
   const [isDragging, setIsDragging] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [parseStatus, setParseStatus] = useState<ParseStatus>('idle');
   const [visibleLayers, setVisibleLayers] = useState<Record<string, boolean>>({});
   const [expandedLayers, setExpandedLayers] = useState<Record<string, boolean>>({});
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [successMessage, setSuccessMessage] = useState<string>('');
+  const [imagePreview, setImagePreview] = useState<string>('');
+  const [uploadedFileName, setUploadedFileName] = useState<string>('');
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  const [templateDescription, setTemplateDescription] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const pattern = currentPattern || mockTemplates[0].pattern;
 
   const layers = useMemo(() => pattern?.layers || [], [pattern]);
 
+  const calculatePathLength = useCallback((d: string): number => {
+    let length = 0;
+    const commands = d.match(/[a-zA-Z][^a-zA-Z]*/g) || [];
+    let prevX = 0;
+    let prevY = 0;
+
+    for (const cmd of commands) {
+      const type = cmd[0].toUpperCase();
+      const nums = cmd.slice(1).trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
+
+      if (type === 'M' || type === 'L') {
+        for (let i = 0; i < nums.length; i += 2) {
+          const x = nums[i];
+          const y = nums[i + 1];
+          if (i > 0 || type === 'L') {
+            const dx = x - prevX;
+            const dy = y - prevY;
+            length += Math.sqrt(dx * dx + dy * dy);
+          }
+          prevX = x;
+          prevY = y;
+        }
+      } else if (type === 'Q') {
+        for (let i = 0; i < nums.length; i += 4) {
+          const x = nums[i + 2];
+          const y = nums[i + 3];
+          const dx = x - prevX;
+          const dy = y - prevY;
+          length += Math.sqrt(dx * dx + dy * dy) * 1.2;
+          prevX = x;
+          prevY = y;
+        }
+      } else if (type === 'C') {
+        for (let i = 0; i < nums.length; i += 6) {
+          const x = nums[i + 4];
+          const y = nums[i + 5];
+          const dx = x - prevX;
+          const dy = y - prevY;
+          length += Math.sqrt(dx * dx + dy * dy) * 1.3;
+          prevX = x;
+          prevY = y;
+        }
+      } else if (type === 'Z') {
+      }
+    }
+
+    return length || d.length * 0.5;
+  }, []);
+
   const analysisStats = useMemo(() => {
     const totalPaths = layers.reduce((sum, layer) => sum + layer.paths.length, 0);
-    const estimatedLength = totalPaths * 15 + pattern.complexity * 20;
-    const regionCount = Math.floor(pattern.complexity * 2.5) + layers.length;
-    const suggestedLayers = Math.ceil(pattern.complexity * 0.8) + 1;
+    
+    let totalPathLength = 0;
+    layers.forEach((layer) => {
+      layer.paths.forEach((path) => {
+        totalPathLength += calculatePathLength(path);
+      });
+    });
+
+    const estimatedLength = Math.round(totalPathLength * 0.8);
+    const regionCount = Math.floor(totalPaths / 2) + layers.length * 3;
+    const suggestedLayers = Math.min(5, Math.max(2, Math.ceil(totalPaths / 5)));
+    
     return { totalPaths, estimatedLength, regionCount, suggestedLayers };
-  }, [layers, pattern.complexity]);
+  }, [layers, calculatePathLength]);
 
   const { totalPaths, estimatedLength, regionCount, suggestedLayers } = analysisStats;
 
@@ -71,7 +143,10 @@ export default function PatternAnalysis() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    simulateUpload();
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      handleFile(files[0]);
+    }
   };
 
   const handleFileClick = () => {
@@ -80,27 +155,105 @@ export default function PatternAnalysis() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      simulateUpload();
+      handleFile(e.target.files[0]);
     }
   };
 
-  const simulateUpload = () => {
-    setIsAnalyzing(true);
-    setUploadProgress(0);
+  const handleFile = (file: File) => {
+    setErrorMessage('');
+    setSuccessMessage('');
+    setUploadedFileName(file.name);
 
-    const interval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setTimeout(() => {
-            setIsAnalyzing(false);
-            setUploadProgress(0);
-          }, 500);
-          return 100;
-        }
-        return prev + Math.random() * 15 + 5;
+    if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+      handleSVGFile(file);
+    } else if (file.type.startsWith('image/')) {
+      handleImageFile(file);
+    } else {
+      setParseStatus('error');
+      setErrorMessage('不支持的文件格式，请上传 SVG 或图片文件');
+    }
+  };
+
+  const handleSVGFile = (file: File) => {
+    setParseStatus('loading');
+    setUploadProgress(0);
+    setImagePreview('');
+
+    const reader = new FileReader();
+
+    reader.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const progress = Math.round((e.loaded / e.total) * 50);
+        setUploadProgress(progress);
+      }
+    };
+
+    reader.onload = (e) => {
+      try {
+        setUploadProgress(60);
+        const svgContent = e.target?.result as string;
+        
+        setTimeout(() => {
+          setUploadProgress(80);
+        }, 100);
+
+        setTimeout(() => {
+          try {
+            parsePatternFromSVG(svgContent, file.name);
+            setUploadProgress(100);
+            setParseStatus('success');
+            setSuccessMessage(`成功解析 SVG 文件，共 ${pattern.layers.reduce((sum, l) => sum + l.paths.length, 0)} 条路径`);
+            resetVisibleLayers();
+            
+            setTimeout(() => {
+              setParseStatus('idle');
+              setSuccessMessage('');
+            }, 3000);
+          } catch (error) {
+            setParseStatus('error');
+            setErrorMessage('SVG 解析失败，请检查文件格式');
+            console.error('Parse error:', error);
+          }
+        }, 300);
+      } catch (error) {
+        setParseStatus('error');
+        setErrorMessage('文件读取失败');
+        console.error('File read error:', error);
+      }
+    };
+
+    reader.onerror = () => {
+      setParseStatus('error');
+      setErrorMessage('文件读取出错');
+    };
+
+    reader.readAsText(file);
+  };
+
+  const handleImageFile = (file: File) => {
+    setParseStatus('image');
+    setUploadProgress(100);
+
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      setImagePreview(e.target?.result as string);
+    };
+
+    reader.readAsDataURL(file);
+  };
+
+  const resetVisibleLayers = () => {
+    setTimeout(() => {
+      const visible: Record<string, boolean> = {};
+      const expanded: Record<string, boolean> = {};
+      layers.forEach((layer) => {
+        visible[layer.id] = true;
+        expanded[layer.id] = true;
       });
-    }, 200);
+      setVisibleLayers(visible);
+      setExpandedLayers(expanded);
+    }, 100);
   };
 
   const toggleLayerVisibility = (layerId: string) => {
@@ -115,6 +268,24 @@ export default function PatternAnalysis() {
       ...prev,
       [layerId]: !prev[layerId]
     }));
+  };
+
+  const handleSaveAsTemplate = () => {
+    setTemplateName(pattern.name);
+    setTemplateDescription(pattern.description);
+    setShowSaveDialog(true);
+  };
+
+  const confirmSaveTemplate = () => {
+    if (!templateName.trim()) {
+      return;
+    }
+    saveAsTemplate(templateName.trim(), templateDescription.trim());
+    setShowSaveDialog(false);
+    setSuccessMessage('模板保存成功！');
+    setTimeout(() => {
+      setSuccessMessage('');
+    }, 2000);
   };
 
   const renderStars = (count: number, max: number = 5) => {
@@ -216,7 +387,7 @@ export default function PatternAnalysis() {
         <div className="xl:col-span-3 space-y-6">
           <Card title="纹样导入" subtitle="拖拽或点击上传纹样图案">
             <div
-              className={`relative border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-all duration-300 ${
+              className={`relative border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-all duration-300 ${
                 isDragging
                   ? 'border-gold-400 bg-gold-500/10'
                   : 'border-gold-600/40 hover:border-gold-500/60 hover:bg-gold-500/5'
@@ -234,7 +405,7 @@ export default function PatternAnalysis() {
                 onChange={handleFileChange}
               />
               
-              {isAnalyzing ? (
+              {parseStatus === 'loading' ? (
                 <div className="space-y-3">
                   <div className="w-12 h-12 mx-auto mb-3 relative">
                     <div className="absolute inset-0 border-3 border-gold-500/30 rounded-full" />
@@ -242,7 +413,7 @@ export default function PatternAnalysis() {
                       className="absolute inset-0 border-3 border-gold-400 rounded-full border-t-transparent animate-spin"
                     />
                   </div>
-                  <p className="text-sm text-gold-300 font-medium">分析中...</p>
+                  <p className="text-sm text-gold-300 font-medium">解析中...</p>
                   <div className="w-full bg-ink-700 rounded-full h-2">
                     <div
                       className="bg-gradient-to-r from-gold-500 to-gold-400 h-2 rounded-full transition-all duration-300"
@@ -251,6 +422,32 @@ export default function PatternAnalysis() {
                   </div>
                   <p className="text-xs text-ink-400">
                     {Math.min(Math.round(uploadProgress), 100)}%
+                  </p>
+                </div>
+              ) : parseStatus === 'success' ? (
+                <div className="space-y-2">
+                  <div className="w-14 h-14 mx-auto mb-2 rounded-full bg-green-500/10 flex items-center justify-center">
+                    <Check className="w-7 h-7 text-green-400" />
+                  </div>
+                  <p className="text-sm text-green-400 font-medium">解析成功</p>
+                  <p className="text-xs text-ink-400">{successMessage}</p>
+                </div>
+              ) : parseStatus === 'error' ? (
+                <div className="space-y-2">
+                  <div className="w-14 h-14 mx-auto mb-2 rounded-full bg-red-500/10 flex items-center justify-center">
+                    <AlertCircle className="w-7 h-7 text-red-400" />
+                  </div>
+                  <p className="text-sm text-red-400 font-medium">解析失败</p>
+                  <p className="text-xs text-ink-400">{errorMessage}</p>
+                </div>
+              ) : parseStatus === 'image' ? (
+                <div className="space-y-2">
+                  <div className="w-14 h-14 mx-auto mb-2 rounded-full bg-blue-500/10 flex items-center justify-center">
+                    <ImageIcon className="w-7 h-7 text-blue-400" />
+                  </div>
+                  <p className="text-sm text-blue-400 font-medium">图片已上传</p>
+                  <p className="text-xs text-ink-400">
+                    图片纹样请手动描边或使用SVG格式
                   </p>
                 </div>
               ) : (
@@ -270,6 +467,34 @@ export default function PatternAnalysis() {
                 </>
               )}
             </div>
+
+            {uploadedFileName && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-ink-400">
+                <FileText className="w-3.5 h-3.5" />
+                <span className="truncate">{uploadedFileName}</span>
+              </div>
+            )}
+
+            {successMessage && parseStatus !== 'success' && (
+              <div className="mt-3 p-2 bg-green-500/10 border border-green-500/30 rounded-lg flex items-center gap-2">
+                <Check className="w-4 h-4 text-green-400 flex-shrink-0" />
+                <span className="text-xs text-green-400">{successMessage}</span>
+              </div>
+            )}
+
+            {parseStatus === 'image' && imagePreview && (
+              <div className="mt-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-blue-400 font-medium mb-1">提示</p>
+                    <p className="text-xs text-ink-400">
+                      图片纹样请手动描边或使用SVG格式以获得更好的解析效果
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </Card>
 
           <Card title="纹样预览">
@@ -284,9 +509,17 @@ export default function PatternAnalysis() {
                   <rect width="100" height="100" fill="url(#grid)" />
                 </svg>
               </div>
-              <div className="relative w-full h-full">
-                {generatePatternSVG()}
-              </div>
+              {imagePreview && parseStatus === 'image' ? (
+                <img
+                  src={imagePreview}
+                  alt="预览"
+                  className="relative w-full h-full object-contain"
+                />
+              ) : (
+                <div className="relative w-full h-full">
+                  {generatePatternSVG()}
+                </div>
+              )}
             </div>
           </Card>
 
@@ -319,6 +552,20 @@ export default function PatternAnalysis() {
                 </div>
               </div>
             </div>
+          </Card>
+
+          <Card title="保存模板">
+            <p className="text-xs text-ink-400 mb-3">
+              将当前纹样和配比保存为模板，方便后续直接使用
+            </p>
+            <Button
+              variant="primary"
+              className="w-full"
+              onClick={handleSaveAsTemplate}
+            >
+              <Save className="w-4 h-4 mr-2" />
+              另存为模板
+            </Button>
           </Card>
         </div>
 
@@ -612,21 +859,24 @@ export default function PatternAnalysis() {
                   {expandedLayers[layer.id] && (
                     <div className="px-3 pb-3 pt-0">
                       <div className="ml-7 space-y-1.5 border-l border-gold-600/20 pl-3">
-                        {layer.paths.map((path, pathIndex) => (
-                          <div
-                            key={pathIndex}
-                            className="flex items-center gap-2 text-xs text-ink-400 py-1"
-                          >
+                        {layer.paths.map((path, pathIndex) => {
+                          const pathLength = Math.round(calculatePathLength(path) * 0.8);
+                          return (
                             <div
-                              className="w-2 h-2 rounded-full flex-shrink-0"
-                              style={{ backgroundColor: layer.color, opacity: 0.6 + pathIndex * 0.15 }}
-                            />
-                            <span>路径 {pathIndex + 1}</span>
-                            <span className="text-ink-600">
-                              ~{Math.floor(Math.random() * 20 + 10)}cm
-                            </span>
-                          </div>
-                        ))}
+                              key={pathIndex}
+                              className="flex items-center gap-2 text-xs text-ink-400 py-1"
+                            >
+                              <div
+                                className="w-2 h-2 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: layer.color, opacity: 0.6 + pathIndex * 0.15 }}
+                              />
+                              <span>路径 {pathIndex + 1}</span>
+                              <span className="text-ink-600">
+                                ~{pathLength}cm
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -645,6 +895,63 @@ export default function PatternAnalysis() {
           </Card>
         </div>
       </div>
+
+      {showSaveDialog && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-ink-900 border border-gold-600/30 rounded-xl p-6 w-full max-w-md shadow-2xl">
+            <h3 className="text-xl font-serif font-bold text-gold-300 mb-4">
+              保存为模板
+            </h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-ink-400 mb-1.5">
+                  模板名称
+                </label>
+                <input
+                  type="text"
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                  className="w-full bg-ink-800 border border-gold-600/30 rounded-lg px-3 py-2 text-sm text-gold-200 focus:outline-none focus:border-gold-500 transition-colors"
+                  placeholder="请输入模板名称"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm text-ink-400 mb-1.5">
+                  模板描述
+                </label>
+                <textarea
+                  value={templateDescription}
+                  onChange={(e) => setTemplateDescription(e.target.value)}
+                  className="w-full bg-ink-800 border border-gold-600/30 rounded-lg px-3 py-2 text-sm text-gold-200 focus:outline-none focus:border-gold-500 transition-colors resize-none"
+                  rows={3}
+                  placeholder="请输入模板描述（可选）"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => setShowSaveDialog(false)}
+              >
+                取消
+              </Button>
+              <Button
+                variant="primary"
+                className="flex-1"
+                onClick={confirmSaveTemplate}
+                disabled={!templateName.trim()}
+              >
+                <Save className="w-4 h-4 mr-2" />
+                保存
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

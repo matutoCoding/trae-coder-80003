@@ -1,15 +1,16 @@
-import { useState, useMemo } from 'react';
-import { Search, SortAsc, Calendar, Layers, FileText, AlertTriangle, Droplets, Zap, Shield, ChevronDown } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { Search, SortAsc, Calendar, Layers, FileText, AlertTriangle, Droplets, Zap, Shield, ChevronDown, Plus, Check, X, Edit2 } from 'lucide-react';
 import Card from '@/components/UI/Card';
 import Button from '@/components/UI/Button';
 import Badge from '@/components/UI/Badge';
-import { mockCraftRecords, mockTemplates } from '@/data/mockData';
+import { useAppStore } from '@/store/useAppStore';
 import type { CraftRecord } from '@/types';
 
 type StatusFilter = 'all' | 'planned' | 'in-progress' | 'completed' | 'failed';
-type SortType = 'date' | 'complexity' | 'name';
+type SortType = 'date' | 'name';
+type RecordStatus = 'planned' | 'in-progress' | 'completed' | 'failed';
 
-const statusMap: Record<string, { label: string; color: 'gold' | 'green' | 'gray' | 'red' }> = {
+const statusMap: Record<RecordStatus, { label: string; color: 'gold' | 'green' | 'gray' | 'red' }> = {
   'planned': { label: '计划中', color: 'gray' },
   'in-progress': { label: '进行中', color: 'gold' },
   'completed': { label: '已完成', color: 'green' },
@@ -28,19 +29,44 @@ const riskTypeMap: Record<string, { label: string; icon: typeof Droplets }> = {
   'soft': { label: '坍塌变形', icon: Shield },
   'thin': { label: '线径过细', icon: Layers },
   'thick': { label: '线径过粗', icon: Layers },
+  'drying-time': { label: '干燥时间', icon: Calendar },
+  'shape-retention': { label: '形状保持', icon: Shield },
 };
 
 export default function CraftArchive() {
-  const [selectedRecord, setSelectedRecord] = useState<CraftRecord | null>(mockCraftRecords[0] || null);
+  const {
+    craftRecords,
+    templates,
+    createCraftRecord,
+    updateCraftRecord,
+    updateCraftNotes,
+  } = useAppStore();
+
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(craftRecords[0]?.id || null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [sortType, setSortType] = useState<SortType>('date');
   const [sortDropdownOpen, setSortDropdownOpen] = useState(false);
   const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
-  const [notes, setNotes] = useState(selectedRecord?.notes || '');
+  const [statusChangeDropdownOpen, setStatusChangeDropdownOpen] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newRecordName, setNewRecordName] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [createSuccess, setCreateSuccess] = useState(false);
+
+  const selectedRecord = useMemo(() => {
+    return craftRecords.find(r => r.id === selectedRecordId) || null;
+  }, [craftRecords, selectedRecordId]);
+
+  useEffect(() => {
+    if (selectedRecord) {
+      setNotes(selectedRecord.notes);
+    }
+  }, [selectedRecord?.id]);
 
   const filteredRecords = useMemo(() => {
-    let result = [...mockCraftRecords];
+    let result = [...craftRecords];
 
     if (searchQuery) {
       result = result.filter(record =>
@@ -56,30 +82,59 @@ export default function CraftArchive() {
     result.sort((a, b) => {
       if (sortType === 'date') {
         return new Date(b.date).getTime() - new Date(a.date).getTime();
-      } else if (sortType === 'name') {
-        return a.name.localeCompare(b.name);
       } else {
-        const complexityA = mockTemplates.find(t => t.pattern.id === a.patternId)?.pattern.complexity || 0;
-        const complexityB = mockTemplates.find(t => t.pattern.id === b.patternId)?.pattern.complexity || 0;
-        return complexityB - complexityA;
+        return a.name.localeCompare(b.name);
       }
     });
 
     return result;
-  }, [searchQuery, statusFilter, sortType]);
+  }, [craftRecords, searchQuery, statusFilter, sortType]);
 
   const selectedPattern = useMemo(() => {
     if (!selectedRecord) return null;
-    return mockTemplates.find(t => t.pattern.id === selectedRecord.patternId)?.pattern || null;
+    return templates.find(t => t.pattern.id === selectedRecord.patternId)?.pattern || null;
+  }, [selectedRecord, templates]);
+
+  const displayRiskAlerts = useMemo(() => {
+    if (!selectedRecord) return [];
+    return selectedRecord.riskAlerts || selectedRecord.mixture.warnings || [];
   }, [selectedRecord]);
 
   const handleSelectRecord = (record: CraftRecord) => {
-    setSelectedRecord(record);
+    setSelectedRecordId(record.id);
     setNotes(record.notes);
   };
 
+  const handleCreateRecord = () => {
+    if (!newRecordName.trim()) return;
+    
+    try {
+      const newId = createCraftRecord(newRecordName.trim(), '');
+      setSelectedRecordId(newId);
+      setNewRecordName('');
+      setShowCreateModal(false);
+      setCreateSuccess(true);
+      setTimeout(() => setCreateSuccess(false), 2000);
+    } catch (error) {
+      console.error('创建档案失败:', error);
+    }
+  };
+
+  const handleSaveNotes = () => {
+    if (!selectedRecord) return;
+    updateCraftNotes(selectedRecord.id, notes);
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 2000);
+  };
+
+  const handleStatusChange = (newStatus: RecordStatus) => {
+    if (!selectedRecord) return;
+    updateCraftRecord(selectedRecord.id, { status: newStatus });
+    setStatusChangeDropdownOpen(false);
+  };
+
   const renderPatternSVG = (record: CraftRecord, size: 'sm' | 'lg' = 'sm') => {
-    const pattern = mockTemplates.find(t => t.pattern.id === record.patternId)?.pattern;
+    const pattern = templates.find(t => t.pattern.id === record.patternId)?.pattern;
     if (!pattern) return null;
 
     const viewBox = size === 'sm' ? '0 0 100 100' : '0 0 300 200';
@@ -146,14 +201,31 @@ export default function CraftArchive() {
   return (
     <div className="min-h-screen bg-ink-950 text-ink-100 p-6">
       <div className="max-w-7xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-3xl font-serif font-bold text-gold-gradient mb-2">
-            工艺档案
-          </h1>
-          <p className="text-ink-400">
-            记录每件作品，沉淀工艺经验
-          </p>
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-serif font-bold text-gold-gradient mb-2">
+              工艺档案
+            </h1>
+            <p className="text-ink-400">
+              记录每件作品，沉淀工艺经验
+            </p>
+          </div>
+          <Button
+            variant="primary"
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            新建档案
+          </Button>
         </div>
+
+        {createSuccess && (
+          <div className="fixed top-4 right-4 z-50 bg-green-600 text-white px-4 py-2 rounded-md shadow-lg flex items-center gap-2 animate-fade-in">
+            <Check className="w-4 h-4" />
+            档案创建成功
+          </div>
+        )}
 
         <div className="flex gap-6">
           <div className="flex-1">
@@ -179,7 +251,7 @@ export default function CraftArchive() {
                     }}
                     className="min-w-[120px]"
                   >
-                    {statusFilter === 'all' ? '全部状态' : statusMap[statusFilter]?.label || statusFilter}
+                    {statusFilter === 'all' ? '全部状态' : statusMap[statusFilter as RecordStatus]?.label || statusFilter}
                     <ChevronDown className="ml-2 w-4 h-4" />
                   </Button>
                   {statusDropdownOpen && (
@@ -195,7 +267,7 @@ export default function CraftArchive() {
                             statusFilter === status ? 'text-gold-400 bg-gold-500/10' : 'text-ink-300'
                           }`}
                         >
-                          {status === 'all' ? '全部' : statusMap[status]?.label || status}
+                          {status === 'all' ? '全部' : statusMap[status as RecordStatus]?.label || status}
                         </button>
                       ))}
                     </div>
@@ -212,14 +284,13 @@ export default function CraftArchive() {
                     className="min-w-[120px]"
                   >
                     <SortAsc className="mr-2 w-4 h-4" />
-                    {sortType === 'date' ? '按时间' : sortType === 'complexity' ? '按复杂度' : '按名称'}
+                    {sortType === 'date' ? '按时间' : '按名称'}
                     <ChevronDown className="ml-2 w-4 h-4" />
                   </Button>
                   {sortDropdownOpen && (
                     <div className="absolute top-full left-0 mt-1 w-36 bg-ink-800 border border-gold-600/30 rounded-md shadow-lg z-10">
                       {([
                         { value: 'date', label: '按时间' },
-                        { value: 'complexity', label: '按复杂度' },
                         { value: 'name', label: '按名称' },
                       ] as { value: SortType; label: string }[]).map((sort) => (
                         <button
@@ -256,7 +327,7 @@ export default function CraftArchive() {
                     </div>
 
                     <div className="flex items-start justify-between mb-2">
-                      <h3 className="font-serif font-semibold text-gold-300 text-lg">
+                      <h3 className="font-serif font-semibold text-gold-300 text-lg line-clamp-1">
                         {record.name}
                       </h3>
                       {record.riskLevel === 'high' && (
@@ -264,13 +335,13 @@ export default function CraftArchive() {
                       )}
                     </div>
 
-                    <p className="text-sm text-ink-400 mb-3">
+                    <p className="text-sm text-ink-400 mb-3 line-clamp-1">
                       纹样：{record.patternName}
                     </p>
 
                     <div className="flex items-center justify-between">
-                      <Badge color={statusMap[record.status]?.color || 'gray'}>
-                        {statusMap[record.status]?.label || record.status}
+                      <Badge color={statusMap[record.status as RecordStatus]?.color || 'gray'}>
+                        {statusMap[record.status as RecordStatus]?.label || record.status}
                       </Badge>
 
                       <div className="flex items-center text-xs text-ink-500">
@@ -320,9 +391,35 @@ export default function CraftArchive() {
                     </div>
 
                     <div className="flex items-center gap-3">
-                      <Badge color={statusMap[selectedRecord.status]?.color || 'gray'}>
-                        {statusMap[selectedRecord.status]?.label || selectedRecord.status}
-                      </Badge>
+                      <div className="relative">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setStatusChangeDropdownOpen(!statusChangeDropdownOpen);
+                          }}
+                          className="flex items-center gap-1 cursor-pointer"
+                        >
+                          <Badge color={statusMap[selectedRecord.status as RecordStatus]?.color || 'gray'}>
+                            {statusMap[selectedRecord.status as RecordStatus]?.label || selectedRecord.status}
+                          </Badge>
+                          <Edit2 className="w-3 h-3 text-ink-500" />
+                        </button>
+                        {statusChangeDropdownOpen && (
+                          <div className="absolute top-full left-0 mt-1 w-32 bg-ink-800 border border-gold-600/30 rounded-md shadow-lg z-20">
+                            {(['planned', 'in-progress', 'completed', 'failed'] as RecordStatus[]).map((status) => (
+                              <button
+                                key={status}
+                                onClick={() => handleStatusChange(status)}
+                                className={`w-full px-3 py-2 text-left text-sm hover:bg-gold-500/10 transition-colors first:rounded-t-md last:rounded-b-md ${
+                                  selectedRecord.status === status ? 'text-gold-400 bg-gold-500/10' : 'text-ink-300'
+                                }`}
+                              >
+                                {statusMap[status]?.label || status}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <span className="text-ink-500 text-sm flex items-center">
                         <Calendar className="w-3.5 h-3.5 mr-1" />
                         {selectedRecord.date}
@@ -341,7 +438,7 @@ export default function CraftArchive() {
                   <div className="space-y-3">
                     <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
                       <span className="text-ink-400 text-sm">线料配比</span>
-                      <span className="text-gold-300 font-medium">
+                      <span className="text-gold-300 font-medium text-sm">
                         漆 {selectedRecord.mixture.lacquerRatio.toFixed(1)}% / 粉 {selectedRecord.mixture.powderRatio.toFixed(1)}% / 油 {selectedRecord.mixture.oilRatio.toFixed(1)}%
                       </span>
                     </div>
@@ -369,6 +466,12 @@ export default function CraftArchive() {
                         {selectedRecord.coilingModel.totalHeight} mm
                       </span>
                     </div>
+                    <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
+                      <span className="text-ink-400 text-sm">密度</span>
+                      <span className="text-gold-300 font-medium">
+                        {selectedRecord.coilingModel.baseDensity.toFixed(1)}
+                      </span>
+                    </div>
                     <div className="flex justify-between items-center py-2">
                       <span className="text-ink-400 text-sm">总用线量</span>
                       <span className="text-gold-300 font-medium">
@@ -385,8 +488,18 @@ export default function CraftArchive() {
                     className="w-full h-32 bg-ink-800/50 border border-gold-600/30 rounded-md p-3 text-ink-200 text-sm resize-none focus:outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500/50 transition-colors"
                     placeholder="记录工艺心得..."
                   />
-                  <div className="mt-3 flex justify-end">
-                    <Button variant="primary" className="px-4 py-2 text-sm">
+                  <div className="mt-3 flex justify-between items-center">
+                    {saveSuccess && (
+                      <span className="text-green-400 text-sm flex items-center gap-1">
+                        <Check className="w-4 h-4" />
+                        保存成功
+                      </span>
+                    )}
+                    <Button 
+                      variant="primary" 
+                      className="px-4 py-2 text-sm ml-auto"
+                      onClick={handleSaveNotes}
+                    >
                       保存笔记
                     </Button>
                   </div>
@@ -404,9 +517,9 @@ export default function CraftArchive() {
                       </Badge>
                     </div>
 
-                    {selectedRecord.mixture.warnings && selectedRecord.mixture.warnings.length > 0 ? (
+                    {displayRiskAlerts && displayRiskAlerts.length > 0 ? (
                       <div className="space-y-2">
-                        {selectedRecord.mixture.warnings.map((warning, index) => {
+                        {displayRiskAlerts.map((warning, index) => {
                           const riskInfo = riskTypeMap[warning.type];
                           const IconComponent = riskInfo?.icon || AlertTriangle;
                           const badgeColor = warning.level === 'danger' ? 'red' : warning.level === 'warning' ? 'gold' : 'gray';
@@ -474,6 +587,69 @@ export default function CraftArchive() {
           </div>
         </div>
       </div>
+
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-ink-900 border border-gold-600/30 rounded-lg p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-serif font-bold text-gold-gradient">
+                新建工艺档案
+              </h3>
+              <button
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setNewRecordName('');
+                }}
+                className="text-ink-400 hover:text-ink-200 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-ink-400 text-sm mb-4">
+              基于当前配比和盘绕模型创建新的工艺档案
+            </p>
+
+            <div className="mb-6">
+              <label className="block text-sm text-ink-300 mb-2">
+                作品名称
+              </label>
+              <input
+                type="text"
+                value={newRecordName}
+                onChange={(e) => setNewRecordName(e.target.value)}
+                placeholder="请输入作品名称..."
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleCreateRecord();
+                  }
+                }}
+                className="w-full px-4 py-2 bg-ink-800/50 border border-gold-600/30 rounded-md text-ink-100 placeholder-ink-500 focus:outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500/50 transition-colors"
+              />
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setNewRecordName('');
+                }}
+              >
+                取消
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleCreateRecord}
+                disabled={!newRecordName.trim()}
+              >
+                创建档案
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

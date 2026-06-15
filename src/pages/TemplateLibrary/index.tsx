@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Search,
   Grid,
@@ -18,16 +18,27 @@ import {
   Award,
   Users,
   Calendar,
+  Save,
+  Trash2,
+  CheckCircle,
+  AlertCircle,
 } from 'lucide-react';
 import Card from '@/components/UI/Card';
 import Button from '@/components/UI/Button';
 import Badge from '@/components/UI/Badge';
-import { mockTemplates } from '@/data/mockData';
+import { useAppStore } from '@/store/useAppStore';
 import type { Template } from '@/types';
 
 type CategoryType = 'all' | '瑞兽纹样' | '花卉纹样' | '云纹水纹' | '几何纹样' | '山水纹样' | '自定义';
 type SortType = 'hot' | 'new' | 'rating';
 type ViewType = 'grid' | 'list';
+type ToastType = 'success' | 'error' | 'info';
+
+interface ToastState {
+  visible: boolean;
+  message: string;
+  type: ToastType;
+}
 
 const categories: { value: CategoryType; label: string }[] = [
   { value: 'all', label: '全部分类' },
@@ -62,6 +73,15 @@ const difficultyColors: Record<number, 'green' | 'gold' | 'red' | 'gray'> = {
 };
 
 export default function TemplateLibrary() {
+  const {
+    templates,
+    applyTemplate,
+    saveAsTemplate,
+    deleteTemplate,
+    currentPattern,
+    currentCoilingModel,
+  } = useAppStore();
+
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<CategoryType>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -70,9 +90,32 @@ export default function TemplateLibrary() {
   const [sortDropdownOpen, setSortDropdownOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [templateToDelete, setTemplateToDelete] = useState<Template | null>(null);
+  const [saveName, setSaveName] = useState('');
+  const [saveDescription, setSaveDescription] = useState('');
+  const [toast, setToast] = useState<ToastState>({
+    visible: false,
+    message: '',
+    type: 'info',
+  });
+
+  const showToast = (message: string, type: ToastType = 'info') => {
+    setToast({ visible: true, message, type });
+  };
+
+  useEffect(() => {
+    if (toast.visible) {
+      const timer = setTimeout(() => {
+        setToast((prev) => ({ ...prev, visible: false }));
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast.visible]);
 
   const filteredTemplates = useMemo(() => {
-    let result = [...mockTemplates];
+    let result = [...templates];
 
     if (selectedCategory !== 'all') {
       if (selectedCategory === '云纹水纹') {
@@ -80,7 +123,7 @@ export default function TemplateLibrary() {
           (t) => t.category === '云纹' || t.category === '水纹' || t.category === '云纹水纹'
         );
       } else if (selectedCategory === '自定义') {
-        result = result.filter((t) => t.id.startsWith('custom-'));
+        result = result.filter((t) => t.isCustom);
       } else {
         result = result.filter((t) => t.category === selectedCategory);
       }
@@ -107,7 +150,7 @@ export default function TemplateLibrary() {
     });
 
     return result;
-  }, [selectedCategory, searchQuery, sortType]);
+  }, [templates, selectedCategory, searchQuery, sortType]);
 
   const handleTemplateClick = (template: Template) => {
     setSelectedTemplate(template);
@@ -130,6 +173,57 @@ export default function TemplateLibrary() {
       }
       return next;
     });
+  };
+
+  const handleApplyTemplate = (template: Template, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    applyTemplate(template.id);
+    showToast(`模板「${template.name}」已应用到当前工作区`, 'success');
+    if (drawerOpen) {
+      handleCloseDrawer();
+    }
+  };
+
+  const handleSaveAsTemplate = () => {
+    if (!saveName.trim()) {
+      showToast('请输入模板名称', 'error');
+      return;
+    }
+    if (!currentPattern || !currentCoilingModel) {
+      showToast('当前没有可保存的纹样方案', 'error');
+      return;
+    }
+    saveAsTemplate(saveName.trim(), saveDescription.trim());
+    showToast(`模板「${saveName.trim()}」已保存`, 'success');
+    setSaveDialogOpen(false);
+    setSaveName('');
+    setSaveDescription('');
+    setSelectedCategory('自定义');
+  };
+
+  const handleDeleteClick = (template: Template, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTemplateToDelete(template);
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (templateToDelete) {
+      deleteTemplate(templateToDelete.id);
+      showToast(`模板「${templateToDelete.name}」已删除`, 'success');
+      if (selectedTemplate?.id === templateToDelete.id) {
+        handleCloseDrawer();
+      }
+    }
+    setDeleteConfirmOpen(false);
+    setTemplateToDelete(null);
+  };
+
+  const handleCancelDelete = () => {
+    setDeleteConfirmOpen(false);
+    setTemplateToDelete(null);
   };
 
   const renderPatternSVG = (template: Template, size: 'sm' | 'lg' = 'sm') => {
@@ -173,14 +267,24 @@ export default function TemplateLibrary() {
     );
   };
 
-  const isCustomTemplate = (template: Template) => template.id.startsWith('custom-');
+  const isCustomTemplate = (template: Template) => !!template.isCustom;
 
   return (
     <div className="min-h-screen bg-ink-950 text-ink-100 p-6">
       <div className="max-w-7xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-3xl font-serif font-bold text-gold-gradient mb-2">模板库</h1>
-          <p className="text-ink-400">经典纹样漆线方案，一键复用快速创作</p>
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-serif font-bold text-gold-gradient mb-2">模板库</h1>
+            <p className="text-ink-400">经典纹样漆线方案，一键复用快速创作</p>
+          </div>
+          <Button
+            variant="primary"
+            onClick={() => setSaveDialogOpen(true)}
+            disabled={!currentPattern || !currentCoilingModel}
+          >
+            <Save className="w-4 h-4 mr-2" />
+            保存当前方案为模板
+          </Button>
         </div>
 
         <div className="mb-6 overflow-x-auto">
@@ -286,13 +390,19 @@ export default function TemplateLibrary() {
                       <Button
                         variant="primary"
                         className="flex-1 py-1.5 text-xs px-3"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                        }}
+                        onClick={(e) => handleApplyTemplate(template, e)}
                       >
                         <Play className="w-3.5 h-3.5 mr-1" />
                         应用
                       </Button>
+                      {isCustomTemplate(template) && (
+                        <button
+                          onClick={(e) => handleDeleteClick(template, e)}
+                          className="p-2 rounded-md bg-ink-800/80 border border-lacquer-600/30 hover:bg-lacquer-500/20 hover:border-lacquer-500/50 text-lacquer-400 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                       <button
                         onClick={(e) => toggleFavorite(template.id, e)}
                         className="p-2 rounded-md bg-ink-800/80 border border-gold-600/30 hover:bg-gold-500/20 hover:border-gold-500/50 transition-colors"
@@ -403,12 +513,20 @@ export default function TemplateLibrary() {
                         <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                           <Button
                             variant="primary"
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => handleApplyTemplate(template, e)}
                             className="py-1.5 px-4 text-sm"
                           >
                             <Play className="w-4 h-4 mr-1" />
                             应用模板
                           </Button>
+                          {isCustomTemplate(template) && (
+                            <button
+                              onClick={(e) => handleDeleteClick(template, e)}
+                              className="p-2 rounded-md border border-lacquer-600/30 hover:bg-lacquer-500/10 text-lacquer-400 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             onClick={(e) => toggleFavorite(template.id, e)}
                             className="p-2 rounded-md border border-gold-600/30 hover:bg-gold-500/10 transition-colors"
@@ -618,7 +736,11 @@ export default function TemplateLibrary() {
 
             <div className="sticky bottom-0 p-6 bg-ink-900/95 backdrop-blur border-t border-gold-600/20">
               <div className="flex gap-3">
-                <Button variant="primary" className="flex-1">
+                <Button
+                  variant="primary"
+                  className="flex-1"
+                  onClick={() => handleApplyTemplate(selectedTemplate)}
+                >
                   <Play className="w-4 h-4 mr-2" />
                   应用模板
                 </Button>
@@ -639,10 +761,127 @@ export default function TemplateLibrary() {
                 <button className="p-3 rounded-md border border-gold-600/50 text-gold-400 hover:bg-gold-500/10 transition-colors">
                   <Share2 className="w-5 h-5" />
                 </button>
+                {isCustomTemplate(selectedTemplate) && (
+                  <button
+                    onClick={(e) => handleDeleteClick(selectedTemplate, e)}
+                    className="p-3 rounded-md border border-lacquer-600/50 text-lacquer-400 hover:bg-lacquer-500/10 transition-colors"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                )}
               </div>
             </div>
           </div>
         )}
+      </div>
+
+      {saveDialogOpen && (
+        <>
+          <div
+            className="fixed inset-0 bg-ink-950/70 backdrop-blur-sm z-50 transition-opacity duration-300"
+            onClick={() => setSaveDialogOpen(false)}
+          />
+          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-md">
+            <Card>
+              <div className="p-6">
+                <h3 className="text-xl font-serif font-bold text-gold-gradient mb-4">
+                  保存为模板
+                </h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm text-ink-300 mb-2">模板名称</label>
+                    <input
+                      type="text"
+                      value={saveName}
+                      onChange={(e) => setSaveName(e.target.value)}
+                      placeholder="请输入模板名称"
+                      className="w-full px-4 py-2 bg-ink-800/50 border border-gold-600/30 rounded-md text-ink-100 placeholder-ink-500 focus:outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500/50 transition-colors"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-ink-300 mb-2">模板描述</label>
+                    <textarea
+                      value={saveDescription}
+                      onChange={(e) => setSaveDescription(e.target.value)}
+                      placeholder="请输入模板描述（可选）"
+                      rows={3}
+                      className="w-full px-4 py-2 bg-ink-800/50 border border-gold-600/30 rounded-md text-ink-100 placeholder-ink-500 focus:outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500/50 transition-colors resize-none"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 mt-6">
+                  <Button variant="secondary" onClick={() => setSaveDialogOpen(false)}>
+                    取消
+                  </Button>
+                  <Button variant="primary" onClick={handleSaveAsTemplate}>
+                    <Save className="w-4 h-4 mr-2" />
+                    保存
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </>
+      )}
+
+      {deleteConfirmOpen && templateToDelete && (
+        <>
+          <div
+            className="fixed inset-0 bg-ink-950/70 backdrop-blur-sm z-50 transition-opacity duration-300"
+            onClick={handleCancelDelete}
+          />
+          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-md">
+            <Card>
+              <div className="p-6">
+                <div className="flex items-center gap-4 mb-4">
+                  <div className="w-12 h-12 rounded-full bg-lacquer-500/20 flex items-center justify-center">
+                    <AlertCircle className="w-6 h-6 text-lacquer-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-serif font-bold text-gold-gradient">
+                      确认删除
+                    </h3>
+                    <p className="text-sm text-ink-400">此操作不可撤销</p>
+                  </div>
+                </div>
+                <p className="text-ink-300 mb-6">
+                  确定要删除模板「{templateToDelete.name}」吗？删除后无法恢复。
+                </p>
+                <div className="flex justify-end gap-3">
+                  <Button variant="secondary" onClick={handleCancelDelete}>
+                    取消
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={handleConfirmDelete}
+                    className="bg-gradient-to-r from-lacquer-600 to-lacquer-700 hover:from-lacquer-500 hover:to-lacquer-600"
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    删除
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </>
+      )}
+
+      <div
+        className={`fixed top-6 right-6 z-[60] transition-all duration-300 transform ${
+          toast.visible ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
+        }`}
+      >
+        <Card className="flex items-center gap-3 px-4 py-3 min-w-[280px]">
+          {toast.type === 'success' ? (
+            <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0" />
+          ) : toast.type === 'error' ? (
+            <AlertCircle className="w-5 h-5 text-lacquer-400 flex-shrink-0" />
+          ) : (
+            <Sparkles className="w-5 h-5 text-gold-400 flex-shrink-0" />
+          )}
+          <span className="text-sm text-ink-200">{toast.message}</span>
+        </Card>
       </div>
     </div>
   );

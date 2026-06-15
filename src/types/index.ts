@@ -90,13 +90,15 @@ export interface CraftRecord {
   id: string;
   name: string;
   date: string;
+  creationDate?: string;
   patternId: string;
   patternName: string;
   mixture: ThreadMixture;
   coilingModel: CoilingModel;
   notes: string;
-  status: 'completed' | 'in-progress' | 'planned';
+  status: 'completed' | 'in-progress' | 'planned' | 'failed';
   riskLevel: 'low' | 'medium' | 'high';
+  riskAlerts?: WarningItem[];
 }
 
 export interface Template {
@@ -109,6 +111,7 @@ export interface Template {
   coilingModel: CoilingModel;
   usageCount: number;
   createdAt: string;
+  isCustom?: boolean;
 }
 
 export type TabType = 'pattern' | 'mixture' | 'coiling' | 'records' | 'templates';
