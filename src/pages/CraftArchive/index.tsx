@@ -1,10 +1,10 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Search, SortAsc, Calendar, Layers, FileText, AlertTriangle, Droplets, Zap, Shield, ChevronDown, Plus, Check, X, Edit2 } from 'lucide-react';
+import { Search, SortAsc, Calendar, Layers, FileText, AlertTriangle, Droplets, Zap, Shield, ChevronDown, Plus, Check, X, Edit2, GitBranch, Save, Download, ArrowUpDown, Clock, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import Card from '@/components/UI/Card';
 import Button from '@/components/UI/Button';
 import Badge from '@/components/UI/Badge';
 import { useAppStore } from '@/store/useAppStore';
-import type { CraftRecord } from '@/types';
+import type { CraftRecord, RecordVersion } from '@/types';
 
 type StatusFilter = 'all' | 'planned' | 'in-progress' | 'completed' | 'failed';
 type SortType = 'date' | 'name';
@@ -33,6 +33,13 @@ const riskTypeMap: Record<string, { label: string; icon: typeof Droplets }> = {
   'shape-retention': { label: '形状保持', icon: Shield },
 };
 
+const changeTypeMap: Record<string, { label: string; color: 'gold' | 'green' | 'gray' | 'red' }> = {
+  'mixture': { label: '配比调整', color: 'gold' },
+  'coiling': { label: '盘绕调整', color: 'green' },
+  'notes': { label: '笔记更新', color: 'gray' },
+  'all': { label: '全部更新', color: 'red' },
+};
+
 export default function CraftArchive() {
   const {
     craftRecords,
@@ -40,6 +47,8 @@ export default function CraftArchive() {
     createCraftRecord,
     updateCraftRecord,
     updateCraftNotes,
+    saveRecordVersion,
+    loadRecordToWorkspace,
   } = useAppStore();
 
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(craftRecords[0]?.id || null);
@@ -54,6 +63,14 @@ export default function CraftArchive() {
   const [newRecordName, setNewRecordName] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [createSuccess, setCreateSuccess] = useState(false);
+  const [showVersionModal, setShowVersionModal] = useState(false);
+  const [versionDescription, setVersionDescription] = useState('');
+  const [versionChangeType, setVersionChangeType] = useState<'mixture' | 'coiling' | 'notes' | 'all'>('all');
+  const [versionSaveSuccess, setVersionSaveSuccess] = useState(false);
+  const [loadSuccess, setLoadSuccess] = useState(false);
+  const [showCompareModal, setShowCompareModal] = useState(false);
+  const [compareVersion1, setCompareVersion1] = useState<string | null>(null);
+  const [compareVersion2, setCompareVersion2] = useState<string | null>(null);
 
   const selectedRecord = useMemo(() => {
     return craftRecords.find(r => r.id === selectedRecordId) || null;
@@ -92,8 +109,23 @@ export default function CraftArchive() {
 
   const selectedPattern = useMemo(() => {
     if (!selectedRecord) return null;
+    if (selectedRecord.patternSnapshot) {
+      return selectedRecord.patternSnapshot;
+    }
     return templates.find(t => t.pattern.id === selectedRecord.patternId)?.pattern || null;
   }, [selectedRecord, templates]);
+
+  const sortedVersions = useMemo(() => {
+    if (!selectedRecord?.versions) return [];
+    return [...selectedRecord.versions].sort((a, b) => 
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  }, [selectedRecord?.versions]);
+
+  const totalPathCount = useMemo(() => {
+    if (!selectedPattern?.layers) return 0;
+    return selectedPattern.layers.reduce((sum, layer) => sum + layer.paths.length, 0);
+  }, [selectedPattern]);
 
   const displayRiskAlerts = useMemo(() => {
     if (!selectedRecord) return [];
@@ -133,9 +165,27 @@ export default function CraftArchive() {
     setStatusChangeDropdownOpen(false);
   };
 
+  const getPatternFromRecord = (record: CraftRecord) => {
+    if (record.patternSnapshot) {
+      return record.patternSnapshot;
+    }
+    return templates.find(t => t.pattern.id === record.patternId)?.pattern || null;
+  };
+
   const renderPatternSVG = (record: CraftRecord, size: 'sm' | 'lg' = 'sm') => {
-    const pattern = templates.find(t => t.pattern.id === record.patternId)?.pattern;
+    const pattern = getPatternFromRecord(record);
     if (!pattern) return null;
+
+    if (record.imagePreview || pattern.imagePreview) {
+      const imgSrc = record.imagePreview || pattern.imagePreview;
+      return (
+        <img 
+          src={imgSrc} 
+          alt={pattern.name}
+          className="w-full h-full object-contain"
+        />
+      );
+    }
 
     const viewBox = size === 'sm' ? '0 0 100 100' : '0 0 300 200';
     const strokeWidth = size === 'sm' ? 1.5 : 2;
@@ -159,6 +209,65 @@ export default function CraftArchive() {
         ))}
       </svg>
     );
+  };
+
+  const formatTimestamp = (timestamp: string) => {
+    const date = new Date(timestamp);
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const handleSaveVersion = () => {
+    if (!selectedRecord || !versionDescription.trim()) return;
+    
+    try {
+      saveRecordVersion(selectedRecord.id, versionDescription.trim(), versionChangeType);
+      setVersionDescription('');
+      setShowVersionModal(false);
+      setVersionSaveSuccess(true);
+      setTimeout(() => setVersionSaveSuccess(false), 2000);
+    } catch (error) {
+      console.error('保存版本失败:', error);
+    }
+  };
+
+  const handleLoadToWorkspace = () => {
+    if (!selectedRecord) return;
+    
+    try {
+      loadRecordToWorkspace(selectedRecord.id);
+      setLoadSuccess(true);
+      setTimeout(() => setLoadSuccess(false), 3000);
+    } catch (error) {
+      console.error('加载到工作区失败:', error);
+    }
+  };
+
+  const getCompareVersions = () => {
+    if (!sortedVersions.length) return { v1: null, v2: null };
+    const v1 = sortedVersions.find(v => v.id === compareVersion1) || null;
+    const v2 = sortedVersions.find(v => v.id === compareVersion2) || null;
+    return { v1, v2 };
+  };
+
+  const renderCompareArrow = (value: number, isBetter: boolean) => {
+    if (value === 0) {
+      return <Minus className="w-4 h-4 text-ink-400" />;
+    }
+    if (isBetter) {
+      return <TrendingUp className="w-4 h-4 text-green-400" />;
+    }
+    return <TrendingDown className="w-4 h-4 text-red-400" />;
+  };
+
+  const getRiskLevelOrder = (level: string) => {
+    const order: Record<string, number> = { 'low': 1, 'medium': 2, 'high': 3 };
+    return order[level] || 0;
   };
 
   const renderCoilingPaths = () => {
@@ -428,18 +537,48 @@ export default function CraftArchive() {
                   </div>
                 </Card>
 
-                <Card title="盘绕走向图">
-                  <div className="bg-ink-900/50 rounded-md border border-gold-600/20 p-4">
-                    {renderCoilingPaths()}
+                <Card title="纹样快照">
+                  <div className="bg-ink-900/50 rounded-md border border-gold-600/20 mb-4 overflow-hidden">
+                    <div className="aspect-video">
+                      {renderPatternSVG(selectedRecord, 'lg')}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-ink-800/50 rounded-md p-3 border border-gold-600/10">
+                      <div className="text-ink-400 text-xs mb-1">层数</div>
+                      <div className="text-gold-300 font-medium flex items-center gap-1">
+                        <Layers className="w-4 h-4" />
+                        {selectedPattern?.layers?.length || 0} 层
+                      </div>
+                    </div>
+                    <div className="bg-ink-800/50 rounded-md p-3 border border-gold-600/10">
+                      <div className="text-ink-400 text-xs mb-1">路径数</div>
+                      <div className="text-gold-300 font-medium flex items-center gap-1">
+                        <FileText className="w-4 h-4" />
+                        {totalPathCount} 条
+                      </div>
+                    </div>
                   </div>
                 </Card>
 
-                <Card title="参数详情">
+                <Card title="配比信息">
                   <div className="space-y-3">
                     <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
-                      <span className="text-ink-400 text-sm">线料配比</span>
-                      <span className="text-gold-300 font-medium text-sm">
-                        漆 {selectedRecord.mixture.lacquerRatio.toFixed(1)}% / 粉 {selectedRecord.mixture.powderRatio.toFixed(1)}% / 油 {selectedRecord.mixture.oilRatio.toFixed(1)}%
+                      <span className="text-ink-400 text-sm">漆料比例</span>
+                      <span className="text-gold-300 font-medium">
+                        {selectedRecord.mixture.lacquerRatio.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
+                      <span className="text-ink-400 text-sm">粉料比例</span>
+                      <span className="text-gold-300 font-medium">
+                        {selectedRecord.mixture.powderRatio.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
+                      <span className="text-ink-400 text-sm">油类比例</span>
+                      <span className="text-gold-300 font-medium">
+                        {selectedRecord.mixture.oilRatio.toFixed(1)}%
                       </span>
                     </div>
                     <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
@@ -448,14 +587,19 @@ export default function CraftArchive() {
                         {selectedRecord.mixture.hardnessIndex.toFixed(1)}
                       </span>
                     </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
-                      <span className="text-ink-400 text-sm">线径</span>
+                    <div className="flex justify-between items-center py-2">
+                      <span className="text-ink-400 text-sm">推荐线径</span>
                       <span className="text-gold-300 font-medium">
                         {selectedRecord.mixture.recommendedDiameter.toFixed(2)} mm
                       </span>
                     </div>
+                  </div>
+                </Card>
+
+                <Card title="盘绕模型">
+                  <div className="space-y-3">
                     <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
-                      <span className="text-ink-400 text-sm">层数</span>
+                      <span className="text-ink-400 text-sm">总层数</span>
                       <span className="text-gold-300 font-medium">
                         {selectedRecord.coilingModel.totalLayers} 层
                       </span>
@@ -467,17 +611,60 @@ export default function CraftArchive() {
                       </span>
                     </div>
                     <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
-                      <span className="text-ink-400 text-sm">密度</span>
+                      <span className="text-ink-400 text-sm">基础密度</span>
                       <span className="text-gold-300 font-medium">
                         {selectedRecord.coilingModel.baseDensity.toFixed(1)}
                       </span>
                     </div>
-                    <div className="flex justify-between items-center py-2">
+                    <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
                       <span className="text-ink-400 text-sm">总用线量</span>
                       <span className="text-gold-300 font-medium">
                         {selectedRecord.coilingModel.wireLength} cm
                       </span>
                     </div>
+                    <div className="flex justify-between items-center py-2">
+                      <span className="text-ink-400 text-sm">预估时间</span>
+                      <span className="text-gold-300 font-medium">
+                        {selectedRecord.coilingModel.estimatedTime} 分钟
+                      </span>
+                    </div>
+                  </div>
+                </Card>
+
+                <Card title="操作">
+                  <div className="space-y-3">
+                    <Button
+                      variant="primary"
+                      className="w-full flex items-center justify-center gap-2"
+                      onClick={() => setShowVersionModal(true)}
+                    >
+                      <Save className="w-4 h-4" />
+                      保存新版本
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      className="w-full flex items-center justify-center gap-2"
+                      onClick={handleLoadToWorkspace}
+                    >
+                      <Download className="w-4 h-4" />
+                      加载到工作区
+                    </Button>
+                    {sortedVersions.length >= 2 && (
+                      <Button
+                        variant="secondary"
+                        className="w-full flex items-center justify-center gap-2"
+                        onClick={() => {
+                          if (sortedVersions.length >= 2) {
+                            setCompareVersion1(sortedVersions[0].id);
+                            setCompareVersion2(sortedVersions[1].id);
+                            setShowCompareModal(true);
+                          }
+                        }}
+                      >
+                        <ArrowUpDown className="w-4 h-4" />
+                        版本对比
+                      </Button>
+                    )}
                   </div>
                 </Card>
 
@@ -503,6 +690,87 @@ export default function CraftArchive() {
                       保存笔记
                     </Button>
                   </div>
+                </Card>
+
+                <Card 
+                  title={
+                    <div className="flex items-center gap-2">
+                      <GitBranch className="w-4 h-4 text-gold-400" />
+                      版本记录
+                    </div>
+                  }
+                >
+                  {sortedVersions.length > 0 ? (
+                    <div className="space-y-3 max-h-80 overflow-y-auto">
+                      {sortedVersions.map((version, index) => (
+                        <div
+                          key={version.id}
+                          className={`p-3 rounded-md border transition-colors ${
+                            index === 0
+                              ? 'bg-gold-500/10 border-gold-500/30'
+                              : 'bg-ink-800/50 border-ink-600/30 hover:border-gold-600/30'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-gold-300">
+                                v{version.version}
+                              </span>
+                              {index === 0 && (
+                                <Badge color="gold" className="text-xs">
+                                  当前版本
+                                </Badge>
+                              )}
+                            </div>
+                            <Badge 
+                              color={changeTypeMap[version.changeType]?.color || 'gray'}
+                              className="text-xs"
+                            >
+                              {changeTypeMap[version.changeType]?.label || version.changeType}
+                            </Badge>
+                          </div>
+                          
+                          <p className="text-sm text-ink-300 mb-2 line-clamp-2">
+                            {version.description}
+                          </p>
+                          
+                          <div className="flex items-center gap-2 text-xs text-ink-500 mb-2">
+                            <Clock className="w-3 h-3" />
+                            {formatTimestamp(version.timestamp)}
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="flex items-center gap-1">
+                              <span className="text-ink-500">风险:</span>
+                              <Badge 
+                                color={riskLevelMap[version.riskLevel]?.color || 'gray'}
+                                className="text-xs py-0 px-1"
+                              >
+                                {riskLevelMap[version.riskLevel]?.label || version.riskLevel}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-ink-500">线径:</span>
+                              <span className="text-ink-300">{version.recommendedDiameter.toFixed(2)}mm</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-ink-500">硬度:</span>
+                              <span className="text-ink-300">{version.hardnessIndex.toFixed(1)}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-ink-500">用线:</span>
+                              <span className="text-ink-300">{version.wireLength}cm</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-6 text-ink-500">
+                      <GitBranch className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">暂无版本记录</p>
+                    </div>
+                  )}
                 </Card>
 
                 <Card title="风险预警">
@@ -648,6 +916,240 @@ export default function CraftArchive() {
               </Button>
             </div>
           </div>
+        </div>
+      )}
+
+      {showVersionModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-ink-900 border border-gold-600/30 rounded-lg p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-serif font-bold text-gold-gradient">
+                保存新版本
+              </h3>
+              <button
+                onClick={() => {
+                  setShowVersionModal(false);
+                  setVersionDescription('');
+                }}
+                className="text-ink-400 hover:text-ink-200 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-ink-400 text-sm mb-4">
+              将当前工作区的配比和盘绕模型保存为新版本
+            </p>
+
+            <div className="mb-4">
+              <label className="block text-sm text-ink-300 mb-2">
+                变更类型
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {(['mixture', 'coiling', 'notes', 'all'] as const).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setVersionChangeType(type)}
+                    className={`px-3 py-2 text-sm rounded-md border transition-colors ${
+                      versionChangeType === type
+                        ? 'bg-gold-500/20 border-gold-500 text-gold-300'
+                        : 'bg-ink-800/50 border-ink-600/30 text-ink-300 hover:border-gold-600/50'
+                    }`}
+                  >
+                    {changeTypeMap[type]?.label || type}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <label className="block text-sm text-ink-300 mb-2">
+                版本说明
+              </label>
+              <textarea
+                value={versionDescription}
+                onChange={(e) => setVersionDescription(e.target.value)}
+                placeholder="请输入版本变更说明..."
+                autoFocus
+                className="w-full h-24 px-4 py-2 bg-ink-800/50 border border-gold-600/30 rounded-md text-ink-100 placeholder-ink-500 focus:outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500/50 transition-colors resize-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowVersionModal(false);
+                  setVersionDescription('');
+                }}
+              >
+                取消
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleSaveVersion}
+                disabled={!versionDescription.trim()}
+              >
+                保存版本
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCompareModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-ink-900 border border-gold-600/30 rounded-lg p-6 w-full max-w-lg shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-serif font-bold text-gold-gradient flex items-center gap-2">
+                <ArrowUpDown className="w-5 h-5" />
+                版本对比
+              </h3>
+              <button
+                onClick={() => {
+                  setShowCompareModal(false);
+                }}
+                className="text-ink-400 hover:text-ink-200 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <div>
+                <label className="block text-sm text-ink-300 mb-2">
+                  版本 1
+                </label>
+                <select
+                  value={compareVersion1 || ''}
+                  onChange={(e) => setCompareVersion1(e.target.value)}
+                  className="w-full px-3 py-2 bg-ink-800/50 border border-gold-600/30 rounded-md text-ink-100 focus:outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500/50 transition-colors"
+                >
+                  {sortedVersions.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      v{v.version} - {v.description.slice(0, 15)}...
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-ink-300 mb-2">
+                  版本 2
+                </label>
+                <select
+                  value={compareVersion2 || ''}
+                  onChange={(e) => setCompareVersion2(e.target.value)}
+                  className="w-full px-3 py-2 bg-ink-800/50 border border-gold-600/30 rounded-md text-ink-100 focus:outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500/50 transition-colors"
+                >
+                  {sortedVersions.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      v{v.version} - {v.description.slice(0, 15)}...
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {compareVersion1 && compareVersion2 && (() => {
+              const { v1, v2 } = getCompareVersions();
+              if (!v1 || !v2) return null;
+
+              const riskDiff = getRiskLevelOrder(v1.riskLevel) - getRiskLevelOrder(v2.riskLevel);
+              const diameterDiff = v1.recommendedDiameter - v2.recommendedDiameter;
+              const hardnessDiff = v1.hardnessIndex - v2.hardnessIndex;
+              const wireDiff = v1.wireLength - v2.wireLength;
+              const heightDiff = v1.totalHeight - v2.totalHeight;
+
+              return (
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
+                    <span className="text-ink-400 text-sm">风险等级</span>
+                    <div className="flex items-center gap-2">
+                      <Badge color={riskLevelMap[v1.riskLevel]?.color}>
+                        {riskLevelMap[v1.riskLevel]?.label}
+                      </Badge>
+                      <span className="text-ink-500">→</span>
+                      <Badge color={riskLevelMap[v2.riskLevel]?.color}>
+                        {riskLevelMap[v2.riskLevel]?.label}
+                      </Badge>
+                      {renderCompareArrow(riskDiff, riskDiff < 0)}
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
+                    <span className="text-ink-400 text-sm">线径</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-ink-300">{v2.recommendedDiameter.toFixed(2)}mm</span>
+                      <span className="text-ink-500">→</span>
+                      <span className="text-gold-300 font-medium">{v1.recommendedDiameter.toFixed(2)}mm</span>
+                      {renderCompareArrow(Math.abs(diameterDiff), diameterDiff < 0)}
+                      <span className={`text-xs ${diameterDiff > 0 ? 'text-red-400' : diameterDiff < 0 ? 'text-green-400' : 'text-ink-500'}`}>
+                        {diameterDiff > 0 ? '+' : ''}{diameterDiff.toFixed(2)}mm
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
+                    <span className="text-ink-400 text-sm">硬度指数</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-ink-300">{v2.hardnessIndex.toFixed(1)}</span>
+                      <span className="text-ink-500">→</span>
+                      <span className="text-gold-300 font-medium">{v1.hardnessIndex.toFixed(1)}</span>
+                      {renderCompareArrow(Math.abs(hardnessDiff), hardnessDiff > 0)}
+                      <span className={`text-xs ${hardnessDiff > 0 ? 'text-green-400' : hardnessDiff < 0 ? 'text-red-400' : 'text-ink-500'}`}>
+                        {hardnessDiff > 0 ? '+' : ''}{hardnessDiff.toFixed(1)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-gold-600/10">
+                    <span className="text-ink-400 text-sm">总用线量</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-ink-300">{v2.wireLength}cm</span>
+                      <span className="text-ink-500">→</span>
+                      <span className="text-gold-300 font-medium">{v1.wireLength}cm</span>
+                      {renderCompareArrow(Math.abs(wireDiff), wireDiff < 0)}
+                      <span className={`text-xs ${wireDiff > 0 ? 'text-red-400' : wireDiff < 0 ? 'text-green-400' : 'text-ink-500'}`}>
+                        {wireDiff > 0 ? '+' : ''}{wireDiff}cm
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-ink-400 text-sm">总高度</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-ink-300">{v2.totalHeight}mm</span>
+                      <span className="text-ink-500">→</span>
+                      <span className="text-gold-300 font-medium">{v1.totalHeight}mm</span>
+                      {renderCompareArrow(Math.abs(heightDiff), heightDiff > 0)}
+                      <span className={`text-xs ${heightDiff > 0 ? 'text-green-400' : heightDiff < 0 ? 'text-red-400' : 'text-ink-500'}`}>
+                        {heightDiff > 0 ? '+' : ''}{heightDiff}mm
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="flex justify-end mt-6">
+              <Button
+                variant="secondary"
+                onClick={() => setShowCompareModal(false)}
+              >
+                关闭
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {versionSaveSuccess && (
+        <div className="fixed top-4 right-4 z-50 bg-green-600 text-white px-4 py-2 rounded-md shadow-lg flex items-center gap-2 animate-fade-in">
+          <Check className="w-4 h-4" />
+          版本保存成功
+        </div>
+      )}
+
+      {loadSuccess && (
+        <div className="fixed top-4 right-4 z-50 bg-green-600 text-white px-4 py-3 rounded-md shadow-lg flex items-center gap-2 animate-fade-in max-w-sm">
+          <Check className="w-5 h-5 flex-shrink-0" />
+          <span>已加载到工作区，可前往各页面编辑</span>
         </div>
       )}
     </div>

@@ -46,6 +46,10 @@ export interface Pattern {
   complexity: number;
   layers: PatternLayer[];
   tags: string[];
+  svgContent?: string;
+  imagePreview?: string;
+  totalPathLength?: number;
+  pathCount?: number;
 }
 
 export interface ThreadMixture {
@@ -86,6 +90,23 @@ export interface CoilingModel {
   wireLength: number;
 }
 
+export interface RecordVersion {
+  id: string;
+  version: number;
+  timestamp: string;
+  description: string;
+  mixture: ThreadMixture;
+  coilingModel: CoilingModel;
+  riskLevel: 'low' | 'medium' | 'high';
+  riskAlerts: WarningItem[];
+  notes: string;
+  wireLength: number;
+  totalHeight: number;
+  recommendedDiameter: number;
+  hardnessIndex: number;
+  changeType: 'mixture' | 'coiling' | 'notes' | 'all';
+}
+
 export interface CraftRecord {
   id: string;
   name: string;
@@ -93,12 +114,18 @@ export interface CraftRecord {
   creationDate?: string;
   patternId: string;
   patternName: string;
+  patternSnapshot: Pattern;
   mixture: ThreadMixture;
   coilingModel: CoilingModel;
   notes: string;
   status: 'completed' | 'in-progress' | 'planned' | 'failed';
   riskLevel: 'low' | 'medium' | 'high';
   riskAlerts?: WarningItem[];
+  versions: RecordVersion[];
+  currentVersion: number;
+  sourceType: 'template' | 'upload' | 'custom';
+  svgContent?: string;
+  imagePreview?: string;
 }
 
 export interface Template {

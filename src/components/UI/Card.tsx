@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils'
 
 interface CardProps {
-  title?: string
+  title?: React.ReactNode
   subtitle?: string
   children?: React.ReactNode
   className?: string
@@ -29,9 +29,15 @@ export default function Card({ title, subtitle, children, className }: CardProps
       {(title || subtitle) && (
         <div className="mb-4 pb-3 border-b border-gold-600/20">
           {title && (
-            <h3 className="text-lg font-serif font-semibold text-gold-gradient">
-              {title}
-            </h3>
+            typeof title === 'string' ? (
+              <h3 className="text-lg font-serif font-semibold text-gold-gradient">
+                {title}
+              </h3>
+            ) : (
+              <div className="text-lg font-serif font-semibold text-gold-gradient">
+                {title}
+              </div>
+            )
           )}
           {subtitle && (
             <p className="mt-1 text-sm text-ink-400">{subtitle}</p>

@@ -361,41 +361,120 @@ export const mockTemplates: Template[] = [
   }
 ];
 
+function generateRiskAlerts(mixture: ThreadMixture) {
+  const alerts = [...mixture.warnings];
+
+  if (mixture.oilRatio > 30) {
+    alerts.push({
+      type: 'drying-time',
+      level: mixture.oilRatio > 40 ? 'danger' as const : 'warning' as const,
+      message: mixture.oilRatio > 40 ? '干燥时间预计超过72小时，需延长固化周期' : '干燥时间较长，建议预留充足固化时间'
+    });
+  }
+
+  if (mixture.hardnessIndex < 40) {
+    alerts.push({
+      type: 'shape-retention',
+      level: 'warning' as const,
+      message: '漆线硬度偏低，盘绕时需注意支撑，防止变形坍塌'
+    });
+  }
+
+  return alerts;
+}
+
+function createInitialVersion(
+  versionId: string,
+  mixture: ThreadMixture,
+  coilingModel: CoilingModel,
+  notes: string,
+  riskLevel: 'low' | 'medium' | 'high',
+  riskAlerts: typeof mixture.warnings
+) {
+  return {
+    id: versionId,
+    version: 1,
+    timestamp: '2025-06-10T08:00:00.000Z',
+    description: '初始版本',
+    mixture: { ...mixture },
+    coilingModel: { ...coilingModel },
+    riskLevel,
+    riskAlerts: [...riskAlerts],
+    notes,
+    wireLength: coilingModel.wireLength,
+    totalHeight: coilingModel.totalHeight,
+    recommendedDiameter: mixture.recommendedDiameter,
+    hardnessIndex: mixture.hardnessIndex,
+    changeType: 'all' as const
+  };
+}
+
+const record1Alerts = generateRiskAlerts(fineMixture);
+const record2Alerts = generateRiskAlerts(standardMixture);
+const record3Alerts = generateRiskAlerts(hardMixture);
+
 export const mockCraftRecords: CraftRecord[] = [
   {
     id: 'record-1',
     name: '青花龙凤瓶',
     date: '2025-06-10',
+    creationDate: '2025-06-10',
     patternId: 'pattern-longfeng',
     patternName: '龙凤呈祥',
+    patternSnapshot: { ...longfengPattern, imagePreview: '' },
     mixture: fineMixture,
     coilingModel: delicateCoiling,
     notes: '龙凤主体采用金线盘绕，祥云用稍粗线料打底，整体效果良好',
     status: 'completed',
-    riskLevel: 'low'
+    riskLevel: 'low',
+    riskAlerts: record1Alerts,
+    versions: [
+      createInitialVersion('v1-record1', fineMixture, delicateCoiling, '龙凤主体采用金线盘绕，祥云用稍粗线料打底，整体效果良好', 'low', record1Alerts)
+    ],
+    currentVersion: 1,
+    sourceType: 'template',
+    imagePreview: ''
   },
   {
     id: 'record-2',
     name: '缠枝莲纹盒',
     date: '2025-06-12',
+    creationDate: '2025-06-12',
     patternId: 'pattern-chanzhi',
     patternName: '缠枝莲花',
+    patternSnapshot: { ...chanzhiPattern, imagePreview: '' },
     mixture: standardMixture,
     coilingModel: standardCoiling,
     notes: '莲花瓣处需注意堆叠高度，避免线条坍塌',
     status: 'in-progress',
-    riskLevel: 'medium'
+    riskLevel: 'medium',
+    riskAlerts: record2Alerts,
+    versions: [
+      createInitialVersion('v1-record2', standardMixture, standardCoiling, '莲花瓣处需注意堆叠高度，避免线条坍塌', 'medium', record2Alerts)
+    ],
+    currentVersion: 1,
+    sourceType: 'template',
+    imagePreview: ''
   },
   {
     id: 'record-3',
     name: '海水江崖鼎',
     date: '2025-06-15',
+    creationDate: '2025-06-15',
     patternId: 'pattern-haishui',
     patternName: '海水江崖',
+    patternSnapshot: { ...haishuiPattern, imagePreview: '' },
     mixture: hardMixture,
     coilingModel: reliefCoiling,
     notes: '山崖部分浮雕效果明显，海水波纹需分层次处理，注意干燥时间',
     status: 'planned',
-    riskLevel: 'high'
+    riskLevel: 'high',
+    riskAlerts: record3Alerts,
+    versions: [
+      createInitialVersion('v1-record3', hardMixture, reliefCoiling, '山崖部分浮雕效果明显，海水波纹需分层次处理，注意干燥时间', 'high', record3Alerts)
+    ],
+    currentVersion: 1,
+    sourceType: 'template',
+    imagePreview: ''
   }
 ];

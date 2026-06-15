@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import type { Pattern, ThreadMixture, CoilingModel, Template, CraftRecord, TabType, WarningItem, PatternLayer } from '../types';
+import type { Pattern, ThreadMixture, CoilingModel, Template, CraftRecord, TabType, WarningItem, RecordVersion } from '../types';
 import { mockTemplates, mockCraftRecords } from '../data/mockData';
+import { generatePatternFromSVG } from '../utils/svgParser';
 
 const TEMPLATES_KEY = 'lacquer-templates';
 const RECORDS_KEY = 'lacquer-records';
@@ -144,81 +145,15 @@ function generateRiskAlerts(mixture: ThreadMixture): WarningItem[] {
   return alerts;
 }
 
-function parsePathsFromSVG(svgContent: string): string[] {
-  const paths: string[] = [];
-  const pathRegex = /<path[^>]*d="([^"]*)"[^>]*>/gi;
-  let match;
+type WorkspaceSourceType = 'template' | 'custom' | 'upload' | 'record';
 
-  while ((match = pathRegex.exec(svgContent)) !== null) {
-    if (match[1] && match[1].trim().length > 0) {
-      paths.push(match[1].trim());
-    }
-  }
-
-  return paths;
-}
-
-function calculatePathLength(d: string): number {
-  let length = 0;
-  const commands = d.match(/[a-zA-Z][^a-zA-Z]*/g) || [];
-
-  for (const cmd of commands) {
-    const type = cmd[0].toUpperCase();
-    const nums = cmd.slice(1).trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
-
-    if (type === 'M' || type === 'L') {
-      for (let i = 2; i < nums.length; i += 2) {
-        const dx = nums[i] - nums[i - 2];
-        const dy = nums[i + 1] - nums[i - 1];
-        length += Math.sqrt(dx * dx + dy * dy);
-      }
-    } else if (type === 'Q') {
-      for (let i = 4; i < nums.length; i += 4) {
-        const dx = nums[i] - nums[i - 4];
-        const dy = nums[i + 1] - nums[i - 3];
-        length += Math.sqrt(dx * dx + dy * dy);
-      }
-    } else if (type === 'Z') {
-    }
-  }
-
-  return length || d.length;
-}
-
-function createLayersFromPaths(paths: string[]): PatternLayer[] {
-  if (paths.length === 0) return [];
-
-  const pathsWithLength = paths.map((d, index) => ({
-    d,
-    index,
-    length: calculatePathLength(d)
-  }));
-
-  const sorted = [...pathsWithLength].sort((a, b) => b.length - a.length);
-
-  const layerCount = Math.min(3, sorted.length);
-  const perLayer = Math.ceil(sorted.length / layerCount);
-
-  const colors = ['#D4A853', '#E8C872', '#C9A961'];
-  const layerNames = ['主线层', '次线层', '细节层'];
-
-  const layers: PatternLayer[] = [];
-
-  for (let i = 0; i < layerCount; i++) {
-    const start = i * perLayer;
-    const end = Math.min(start + perLayer, sorted.length);
-    const layerPaths = sorted.slice(start, end).map(p => p.d);
-
-    layers.push({
-      id: `layer-${i + 1}`,
-      name: layerNames[i] || `第${i + 1}层`,
-      paths: layerPaths,
-      order: i + 1,
-      color: colors[i] || '#D4A853'
-    });
-  }
-
-  return layers;
+interface WorkspaceSource {
+  type: WorkspaceSourceType;
+  name: string;
+  id?: string;
+  patternSourceId?: string;
+  mixtureSourceId?: string;
+  coilingSourceId?: string;
 }
 
 interface AppState {
@@ -228,6 +163,8 @@ interface AppState {
   templates: Template[];
   craftRecords: CraftRecord[];
   activeTab: TabType;
+  workspaceSource: WorkspaceSource;
+  hasUnsavedChanges: boolean;
 
   setCurrentPattern: (pattern: Pattern) => void;
   updateMixtureRatio: (lacquer: number, powder: number, oil: number) => void;
@@ -237,43 +174,85 @@ interface AppState {
   addTemplate: (template: Template) => void;
   deleteTemplate: (id: string) => void;
   setActiveTab: (tab: TabType) => void;
+  setHasUnsavedChanges: (value: boolean) => void;
 
   applyTemplate: (templateId: string) => void;
   saveAsTemplate: (name: string, description: string) => void;
   createCraftRecord: (title: string, notes: string) => string;
   updateCraftNotes: (id: string, notes: string) => void;
   parsePatternFromSVG: (svgContent: string, fileName: string) => Pattern;
+  saveRecordVersion: (recordId: string, description: string, changeType: 'mixture' | 'coiling' | 'notes' | 'all') => void;
+  loadRecordToWorkspace: (recordId: string) => void;
 }
 
 const initialTemplates = loadFromStorage<Template[]>(TEMPLATES_KEY, mockTemplates);
 const initialRecords = loadFromStorage<CraftRecord[]>(RECORDS_KEY, mockCraftRecords);
 
+const defaultTemplate = initialTemplates[0];
+
 export const useAppStore = create<AppState>((set, get) => ({
-  currentPattern: initialTemplates[0]?.pattern || null,
+  currentPattern: defaultTemplate?.pattern || null,
   currentMixture: {
     lacquer: 60,
     powder: 30,
     oil: 10,
     ...calculateMixtureParams(60, 30, 10)
   },
-  currentCoilingModel: initialTemplates[0]?.coilingModel || null,
+  currentCoilingModel: defaultTemplate?.coilingModel || null,
   templates: initialTemplates,
   craftRecords: initialRecords,
   activeTab: 'pattern',
+  workspaceSource: defaultTemplate
+    ? {
+        type: 'template',
+        name: defaultTemplate.name,
+        id: defaultTemplate.id,
+        patternSourceId: defaultTemplate.pattern.id,
+        mixtureSourceId: defaultTemplate.id,
+        coilingSourceId: defaultTemplate.coilingModel.id
+      }
+    : {
+        type: 'custom',
+        name: '自定义方案'
+      },
+  hasUnsavedChanges: false,
 
-  setCurrentPattern: (pattern) => set({ currentPattern: pattern }),
+  setCurrentPattern: (pattern) =>
+    set((state) => ({
+      currentPattern: pattern,
+      hasUnsavedChanges: true,
+      workspaceSource: {
+        ...state.workspaceSource,
+        patternSourceId: undefined
+      }
+    })),
 
   updateMixtureRatio: (lacquer, powder, oil) =>
-    set({
+    set((state) => ({
       currentMixture: {
         lacquer,
         powder,
         oil,
         ...calculateMixtureParams(lacquer, powder, oil)
+      },
+      hasUnsavedChanges: true,
+      workspaceSource: {
+        ...state.workspaceSource,
+        mixtureSourceId: undefined
       }
-    }),
+    })),
 
-  setCurrentCoilingModel: (model) => set({ currentCoilingModel: model }),
+  setCurrentCoilingModel: (model) =>
+    set((state) => ({
+      currentCoilingModel: model,
+      hasUnsavedChanges: true,
+      workspaceSource: {
+        ...state.workspaceSource,
+        coilingSourceId: undefined
+      }
+    })),
+
+  setHasUnsavedChanges: (value) => set({ hasUnsavedChanges: value }),
 
   addCraftRecord: (record) =>
     set((state) => {
@@ -315,6 +294,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const lacquer = Math.round(threadMixture.lacquerRatio);
     const powder = Math.round(threadMixture.powderRatio);
     let oil = 100 - lacquer - powder;
+
+    const commonSource = {
+      type: 'template' as const,
+      name: template.name,
+      id: template.id,
+      patternSourceId: template.pattern.id,
+      mixtureSourceId: template.id,
+      coilingSourceId: template.coilingModel.id
+    };
+
     if (oil < 0) {
       oil = 0;
       const adjust = 100 - lacquer - oil;
@@ -331,7 +320,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         currentCoilingModel: template.coilingModel,
         templates: state.templates.map((t) =>
           t.id === templateId ? { ...t, usageCount: t.usageCount + 1 } : t
-        )
+        ),
+        workspaceSource: commonSource,
+        hasUnsavedChanges: false
       }));
     } else {
       set((state) => ({
@@ -345,7 +336,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         currentCoilingModel: template.coilingModel,
         templates: state.templates.map((t) =>
           t.id === templateId ? { ...t, usageCount: t.usageCount + 1 } : t
-        )
+        ),
+        workspaceSource: commonSource,
+        hasUnsavedChanges: false
       }));
     }
 
@@ -373,7 +366,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const newTemplates = [...state.templates, newTemplate];
       saveToStorage(TEMPLATES_KEY, newTemplates);
-      return { templates: newTemplates };
+      return {
+        templates: newTemplates,
+        hasUnsavedChanges: false,
+        workspaceSource: {
+          type: 'template',
+          name,
+          id: newTemplate.id,
+          patternSourceId: currentPattern.id,
+          mixtureSourceId: newTemplate.id,
+          coilingSourceId: currentCoilingModel.id
+        }
+      };
     });
   },
 
@@ -388,6 +392,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     const riskAlerts = generateRiskAlerts(currentMixture);
     const riskLevel = calculateRiskLevel(riskAlerts);
 
+    let sourceType: 'upload' | 'template' | 'custom' = 'custom';
+    const category = currentPattern.category;
+    if (category.includes('导入') || category.includes('上传')) {
+      sourceType = 'upload';
+    } else if (category.includes('模板') || category.includes('传统') || category.includes('经典')) {
+      sourceType = 'template';
+    }
+
+    const patternSnapshot: Pattern = {
+      ...currentPattern,
+      imagePreview: currentPattern.imagePreview || ''
+    };
+
+    const initialVersion: RecordVersion = {
+      id: `v1-${timestamp}`,
+      version: 1,
+      timestamp: new Date().toISOString(),
+      description: '初始版本',
+      mixture: { ...currentMixture },
+      coilingModel: { ...currentCoilingModel },
+      riskLevel,
+      riskAlerts: [...riskAlerts],
+      notes,
+      wireLength: currentCoilingModel.wireLength,
+      totalHeight: currentCoilingModel.totalHeight,
+      recommendedDiameter: currentMixture.recommendedDiameter,
+      hardnessIndex: currentMixture.hardnessIndex,
+      changeType: 'all'
+    };
+
     const newRecord: CraftRecord = {
       id: `record-${timestamp}`,
       name: title,
@@ -395,12 +429,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       creationDate: today,
       patternId: currentPattern.id,
       patternName: currentPattern.name,
+      patternSnapshot,
       mixture: { ...currentMixture },
       coilingModel: { ...currentCoilingModel },
       notes,
       status: 'in-progress',
       riskLevel,
-      riskAlerts
+      riskAlerts,
+      versions: [initialVersion],
+      currentVersion: 1,
+      sourceType,
+      svgContent: currentPattern.svgContent,
+      imagePreview: currentPattern.imagePreview || ''
     };
 
     set((state) => {
@@ -423,23 +463,86 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   parsePatternFromSVG: (svgContent, fileName) => {
-    const paths = parsePathsFromSVG(svgContent);
-    const layers = createLayersFromPaths(paths);
+    const pattern = generatePatternFromSVG(svgContent, fileName);
+    pattern.imagePreview = '';
 
-    const complexity = Math.min(5, Math.ceil(paths.length / 3));
+    set((state) => ({
+      currentPattern: pattern,
+      hasUnsavedChanges: true,
+      workspaceSource: {
+        type: 'upload',
+        name: fileName,
+        patternSourceId: pattern.id
+      }
+    }));
+    return pattern;
+  },
 
-    const pattern: Pattern = {
-      id: `pattern-${Date.now()}`,
-      name: fileName.replace(/\.svg$/i, ''),
-      description: `从 ${fileName} 导入的纹样`,
-      category: '自定义',
-      imageUrl: '',
-      complexity,
-      layers,
-      tags: ['导入', 'SVG']
+  saveRecordVersion: (recordId, description, changeType) => {
+    const { currentMixture, currentCoilingModel, craftRecords } = get();
+    if (!currentCoilingModel) return;
+
+    const record = craftRecords.find((r) => r.id === recordId);
+    if (!record) return;
+
+    const riskAlerts = generateRiskAlerts(currentMixture);
+    const riskLevel = calculateRiskLevel(riskAlerts);
+    const newVersionNum = record.currentVersion + 1;
+    const timestamp = Date.now();
+
+    const newVersion: RecordVersion = {
+      id: `v${newVersionNum}-${timestamp}`,
+      version: newVersionNum,
+      timestamp: new Date().toISOString(),
+      description,
+      mixture: { ...currentMixture },
+      coilingModel: { ...currentCoilingModel },
+      riskLevel,
+      riskAlerts: [...riskAlerts],
+      notes: record.notes,
+      wireLength: currentCoilingModel.wireLength,
+      totalHeight: currentCoilingModel.totalHeight,
+      recommendedDiameter: currentMixture.recommendedDiameter,
+      hardnessIndex: currentMixture.hardnessIndex,
+      changeType
     };
 
-    set({ currentPattern: pattern });
-    return pattern;
+    set((state) => {
+      const newRecords = state.craftRecords.map((r) => {
+        if (r.id !== recordId) return r;
+        return {
+          ...r,
+          mixture: { ...currentMixture },
+          coilingModel: { ...currentCoilingModel },
+          riskLevel,
+          riskAlerts,
+          versions: [...r.versions, newVersion],
+          currentVersion: newVersionNum
+        };
+      });
+      saveToStorage(RECORDS_KEY, newRecords);
+      return { craftRecords: newRecords };
+    });
+  },
+
+  loadRecordToWorkspace: (recordId) => {
+    const { craftRecords } = get();
+    const record = craftRecords.find((r) => r.id === recordId);
+    if (!record) return;
+
+    set({
+      currentPattern: record.patternSnapshot,
+      currentMixture: { ...record.mixture },
+      currentCoilingModel: { ...record.coilingModel },
+      hasUnsavedChanges: false,
+      workspaceSource: {
+        type: 'record',
+        name: record.name,
+        id: record.id,
+        patternSourceId: record.patternSnapshot.id,
+        mixtureSourceId: record.mixture.id || record.id,
+        coilingSourceId: record.coilingModel.id
+      }
+    });
   }
 }));

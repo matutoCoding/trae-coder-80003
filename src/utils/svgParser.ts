@@ -5,26 +5,190 @@ interface PathCommand {
   params: number[];
 }
 
-/**
- * 解析 SVG 字符串，提取所有 <path> 元素的 d 属性
- * @param svgString - SVG 字符串
- * @returns 路径 d 属性数组
- */
+function circleToPath(cx: number, cy: number, r: number): string {
+  return `M ${cx - r} ${cy} A ${r} ${r} 0 1 0 ${cx + r} ${cy} A ${r} ${r} 0 1 0 ${cx - r} ${cy} Z`;
+}
+
+function ellipseToPath(cx: number, cy: number, rx: number, ry: number): string {
+  return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
+}
+
+function rectToPath(x: number, y: number, width: number, height: number, rx: number = 0, ry: number = 0): string {
+  if (rx === 0 && ry === 0) {
+    return `M ${x} ${y} L ${x + width} ${y} L ${x + width} ${y + height} L ${x} ${y + height} Z`;
+  }
+  rx = Math.min(rx, width / 2);
+  ry = Math.min(ry, height / 2);
+  return `M ${x + rx} ${y}
+          L ${x + width - rx} ${y}
+          A ${rx} ${ry} 0 0 1 ${x + width} ${y + ry}
+          L ${x + width} ${y + height - ry}
+          A ${rx} ${ry} 0 0 1 ${x + width - rx} ${y + height}
+          L ${x + rx} ${y + height}
+          A ${rx} ${ry} 0 0 1 ${x} ${y + height - ry}
+          L ${x} ${y + ry}
+          A ${rx} ${ry} 0 0 1 ${x + rx} ${y} Z`;
+}
+
+function polygonToPath(points: string): string {
+  const pts = points.trim().split(/[\s,]+/).map(Number);
+  if (pts.length < 4) return '';
+  let d = `M ${pts[0]} ${pts[1]}`;
+  for (let i = 2; i < pts.length; i += 2) {
+    d += ` L ${pts[i]} ${pts[i + 1]}`;
+  }
+  d += ' Z';
+  return d;
+}
+
+function polylineToPath(points: string): string {
+  const pts = points.trim().split(/[\s,]+/).map(Number);
+  if (pts.length < 4) return '';
+  let d = `M ${pts[0]} ${pts[1]}`;
+  for (let i = 2; i < pts.length; i += 2) {
+    d += ` L ${pts[i]} ${pts[i + 1]}`;
+  }
+  return d;
+}
+
+function lineToPath(x1: number, y1: number, x2: number, y2: number): string {
+  return `M ${x1} ${y1} L ${x2} ${y2}`;
+}
+
+function getElementTransform(element: SVGElement): { translateX: number; translateY: number; scaleX: number; scaleY: number } {
+  const transform = element.getAttribute('transform');
+  let translateX = 0, translateY = 0, scaleX = 1, scaleY = 1;
+  
+  if (transform) {
+    const translateMatch = transform.match(/translate\(\s*([-\d.]+)[,\s]+([-\d.]+)\s*\)/);
+    if (translateMatch) {
+      translateX = parseFloat(translateMatch[1]);
+      translateY = parseFloat(translateMatch[2]);
+    }
+    const scaleMatch = transform.match(/scale\(\s*([-\d.]+)[,\s]*([-\d.]*)\s*\)/);
+    if (scaleMatch) {
+      scaleX = parseFloat(scaleMatch[1]);
+      scaleY = scaleMatch[2] ? parseFloat(scaleMatch[2]) : scaleX;
+    }
+  }
+  
+  return { translateX, translateY, scaleX, scaleY };
+}
+
+function applyTransformToPath(d: string, tx: number, ty: number, sx: number, sy: number): string {
+  if (tx === 0 && ty === 0 && sx === 1 && sy === 1) return d;
+  
+  const points = pathsToPoints(d, 50);
+  if (points.length === 0) return d;
+  
+  const transformed = points.map(p => ({
+    x: p.x * sx + tx,
+    y: p.y * sy + ty
+  }));
+  
+  let newD = `M ${transformed[0].x} ${transformed[0].y}`;
+  for (let i = 1; i < transformed.length; i++) {
+    newD += ` L ${transformed[i].x} ${transformed[i].y}`;
+  }
+  
+  return newD;
+}
+
+function extractPathsFromElement(element: SVGElement, parentTransform = { tx: 0, ty: 0, sx: 1, sy: 1 }): string[] {
+  const paths: string[] = [];
+  const transform = getElementTransform(element);
+  const combinedTx = parentTransform.tx + transform.translateX * parentTransform.sx;
+  const combinedTy = parentTransform.ty + transform.translateY * parentTransform.sy;
+  const combinedSx = parentTransform.sx * transform.scaleX;
+  const combinedSy = parentTransform.sy * transform.scaleY;
+  
+  const tagName = element.tagName.toLowerCase();
+  
+  let d = '';
+  
+  switch (tagName) {
+    case 'path':
+      d = element.getAttribute('d') || '';
+      break;
+    case 'circle': {
+      const cx = parseFloat(element.getAttribute('cx') || '0');
+      const cy = parseFloat(element.getAttribute('cy') || '0');
+      const r = parseFloat(element.getAttribute('r') || '0');
+      d = circleToPath(cx, cy, r);
+      break;
+    }
+    case 'ellipse': {
+      const cx = parseFloat(element.getAttribute('cx') || '0');
+      const cy = parseFloat(element.getAttribute('cy') || '0');
+      const rx = parseFloat(element.getAttribute('rx') || '0');
+      const ry = parseFloat(element.getAttribute('ry') || '0');
+      d = ellipseToPath(cx, cy, rx, ry);
+      break;
+    }
+    case 'rect': {
+      const x = parseFloat(element.getAttribute('x') || '0');
+      const y = parseFloat(element.getAttribute('y') || '0');
+      const width = parseFloat(element.getAttribute('width') || '0');
+      const height = parseFloat(element.getAttribute('height') || '0');
+      const rx = parseFloat(element.getAttribute('rx') || '0');
+      const ry = parseFloat(element.getAttribute('ry') || '0');
+      d = rectToPath(x, y, width, height, rx, ry);
+      break;
+    }
+    case 'polygon': {
+      const points = element.getAttribute('points') || '';
+      d = polygonToPath(points);
+      break;
+    }
+    case 'polyline': {
+      const points = element.getAttribute('points') || '';
+      d = polylineToPath(points);
+      break;
+    }
+    case 'line': {
+      const x1 = parseFloat(element.getAttribute('x1') || '0');
+      const y1 = parseFloat(element.getAttribute('y1') || '0');
+      const x2 = parseFloat(element.getAttribute('x2') || '0');
+      const y2 = parseFloat(element.getAttribute('y2') || '0');
+      d = lineToPath(x1, y1, x2, y2);
+      break;
+    }
+    case 'g':
+    case 'svg':
+    case 'defs':
+    case 'symbol': {
+      const children = Array.from(element.children) as SVGElement[];
+      for (const child of children) {
+        paths.push(...extractPathsFromElement(child, { tx: combinedTx, ty: combinedTy, sx: combinedSx, sy: combinedSy }));
+      }
+      return paths;
+    }
+    default:
+      return paths;
+  }
+  
+  if (d) {
+    const transformedD = applyTransformToPath(d, combinedTx, combinedTy, combinedSx, combinedSy);
+    if (transformedD) {
+      paths.push(transformedD);
+    }
+  }
+  
+  return paths;
+}
+
 export function parseSVGPaths(svgString: string): string[] {
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(svgString, 'image/svg+xml');
-    const paths = doc.querySelectorAll('path');
-    const dAttributes: string[] = [];
-
-    paths.forEach((path) => {
-      const d = path.getAttribute('d');
-      if (d) {
-        dAttributes.push(d);
-      }
-    });
-
-    return dAttributes;
+    const svgElement = doc.documentElement;
+    
+    if (svgElement.tagName.toLowerCase() !== 'svg') {
+      return [];
+    }
+    
+    const paths = extractPathsFromElement(svgElement as unknown as SVGElement);
+    return paths.filter(p => p && p.trim().length > 0);
   } catch (error) {
     console.error('Failed to parse SVG paths:', error);
     return [];
@@ -532,6 +696,7 @@ export function generatePatternFromSVG(svgString: string, fileName: string): Pat
 
     const complexity = estimateComplexity(paths);
     const baseName = fileName.replace(/\.[^/.]+$/, '');
+    const totalPathLength = paths.reduce((sum, d) => sum + calculatePathLength(d), 0);
 
     const tags = ['自定义'];
     if (complexity >= 4) tags.push('复杂');
@@ -550,6 +715,9 @@ export function generatePatternFromSVG(svgString: string, fileName: string): Pat
       complexity,
       layers,
       tags,
+      svgContent: svgString,
+      totalPathLength,
+      pathCount: paths.length,
     };
   } catch (error) {
     console.error('Failed to generate pattern from SVG:', error);
@@ -562,6 +730,9 @@ export function generatePatternFromSVG(svgString: string, fileName: string): Pat
       complexity: 1,
       layers: [],
       tags: ['导入失败'],
+      svgContent: svgString,
+      totalPathLength: 0,
+      pathCount: 0,
     };
   }
 }

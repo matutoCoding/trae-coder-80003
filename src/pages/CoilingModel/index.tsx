@@ -5,6 +5,7 @@ import Button from '@/components/UI/Button'
 import ProgressBar from '@/components/UI/ProgressBar'
 import Badge from '@/components/UI/Badge'
 import ProcessOrderModal from '@/components/ProcessOrderModal'
+import WorkspaceSummary from '@/components/WorkspaceSummary'
 import { useAppStore } from '@/store/useAppStore'
 import { calculateStackHeight, calculateTotalThreadLength, calculateCoilingDensity } from '@/utils/densityCalc'
 import { generateSpiralPath, generateCirclePath } from '@/utils/pathGenerator'
@@ -246,6 +247,14 @@ const CoilingModelPage = () => {
           <p className="text-ink-400 text-lg">
             模拟堆叠层次与光影效果，规划工序流程
           </p>
+        </div>
+
+        <div className="mb-6">
+          <WorkspaceSummary
+            onOpenProcessOrder={handleOpenProcessOrder}
+            onSaveAsRecord={() => setIsSaveRecordDialogOpen(true)}
+            onSaveAsTemplate={handleSaveAsTemplate}
+          />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
